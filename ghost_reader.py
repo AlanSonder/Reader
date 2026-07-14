@@ -11,6 +11,7 @@ Ghost Reader — 幽灵文本阅读器
   - 鼠标移入时窗口显现，可滚动阅读
   - 鼠标移出时恢复隐藏状态
   - 支持拖拽 / 打开 .txt 文件
+  - 内置文件库，自动收集导入的文本文件
   - 老板键 Ctrl+Shift+H 全局隐藏 / 显示
   - 窗口位置、字体、颜色等配置自动保存
 
@@ -23,11 +24,13 @@ Ghost Reader — 幽灵文本阅读器
 
 import sys
 import os
+import shutil
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTextEdit, QVBoxLayout,
     QHBoxLayout, QMenu, QSystemTrayIcon, QStyle, QSizeGrip,
     QMessageBox, QFileDialog, QFontDialog, QColorDialog, QLabel,
+    QListWidget, QListWidgetItem, QPushButton,
 )
 from PyQt5.QtCore import (
     Qt, QTimer, QSettings, QPoint, pyqtSignal,
@@ -60,6 +63,11 @@ OPACITY_SHOWN = 1.0                 # 显现状态不透明度（100%）
 MOUSE_POLL_MS = 50                   # 鼠标位置轮询间隔（毫秒）
 SAVE_DELAY_MS = 500                  # 配置延迟保存间隔（毫秒）
 TITLE_BAR_HEIGHT = 28                # 自定义标题栏高度（像素）
+
+LIBRARY_DIR = os.path.join(          # 文件库目录（用户主目录下）
+    os.path.expanduser("~"), "GhostReader", "library"
+)
+LIBRARY_PANEL_WIDTH = 200            # 文件库侧边栏宽度
 
 
 # ============================================================
@@ -166,7 +174,11 @@ class GhostReader(QMainWindow):
         self.is_boss_hidden = False         # 老板键隐藏状态
         self.is_always_on_top = True        # 始终置顶
         self.last_file_path = ""            # 上次打开的文件路径
+        self.is_library_visible = False     # 文件库侧边栏是否可见
         self._hotkey_handle = None          # keyboard 热键句柄
+
+        # ---- 文件库目录 ----
+        self._init_library_dir()
 
         # ---- 构建 UI ----
         self._init_window_flags()
@@ -204,16 +216,27 @@ class GhostReader(QMainWindow):
         self.setAttribute(Qt.WA_TranslucentBackground)
 
     def _init_ui(self):
-        """构建界面布局"""
+        """构建界面布局: 水平布局 = 文件库侧边栏 + 阅读区"""
         self.resize(DEFAULT_WIDTH, DEFAULT_HEIGHT)
 
         central = QWidget(self)
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setContentsMargins(4, 4, 4, 4)
-        layout.setSpacing(0)
+        main_layout = QHBoxLayout(central)
+        main_layout.setContentsMargins(4, 4, 4, 4)
+        main_layout.setSpacing(0)
 
-        # ---------- 标题栏（可拖动） ----------
+        # ---------- 文件库侧边栏（可隐藏） ----------
+        self._create_library_panel()
+        self.library_panel.setVisible(False)
+        main_layout.addWidget(self.library_panel)
+
+        # ---------- 右侧主区域 ----------
+        right_widget = QWidget()
+        right_layout = QVBoxLayout(right_widget)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(0)
+
+        # 标题栏（可拖动）
         self.title_bar = TitleBar(self)
         self.title_bar.setObjectName("titleBar")
         self.title_bar.setStyleSheet("""
@@ -229,9 +252,9 @@ class GhostReader(QMainWindow):
         self.title_label.setStyleSheet("color: #777; font-size: 11px; background: transparent;")
         title_layout.addWidget(self.title_label)
         title_layout.addStretch()
-        layout.addWidget(self.title_bar)
+        right_layout.addWidget(self.title_bar)
 
-        # ---------- 文本编辑器 ----------
+        # 文本编辑器
         self.text_edit = GhostTextEdit(self)
         self.text_edit.setReadOnly(True)
         self.text_edit.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -266,12 +289,204 @@ class GhostReader(QMainWindow):
                 background: none;
             }
         """)
-        layout.addWidget(self.text_edit, 1)
+        right_layout.addWidget(self.text_edit, 1)
+        main_layout.addWidget(right_widget, 1)
 
         # ---------- 右下角大小调整手柄 ----------
         self.size_grip = QSizeGrip(central)
         self.size_grip.setFixedSize(16, 16)
         self.size_grip.setStyleSheet("background-color: transparent;")
+
+    # ============================================================
+    #  文件库面板
+    # ============================================================
+
+    def _init_library_dir(self):
+        """创建文件库目录（如果不存在）"""
+        if not os.path.exists(LIBRARY_DIR):
+            os.makedirs(LIBRARY_DIR)
+
+    def _create_library_panel(self):
+        """创建文件库侧边面板"""
+        self.library_panel = QWidget(self)
+        self.library_panel.setObjectName("libraryPanel")
+        self.library_panel.setFixedWidth(LIBRARY_PANEL_WIDTH)
+        self.library_panel.setStyleSheet("""
+            QWidget#libraryPanel {
+                background-color: rgba(30, 30, 30, 200);
+                border-top-left-radius: 6px;
+                border-bottom-left-radius: 6px;
+                border-right: 1px solid rgba(60, 60, 60, 150);
+            }
+        """)
+
+        layout = QVBoxLayout(self.library_panel)
+        layout.setContentsMargins(6, 8, 6, 8)
+        layout.setSpacing(6)
+
+        # 标题
+        header = QLabel("文件库", self.library_panel)
+        header.setStyleSheet(
+            "color: #999; font-size: 12px; font-weight: bold; background: transparent;"
+        )
+        layout.addWidget(header)
+
+        # 文件列表
+        self.library_list = QListWidget(self.library_panel)
+        self.library_list.setStyleSheet("""
+            QListWidget {
+                background-color: rgba(20, 20, 20, 150);
+                border: none;
+                color: #BBBBBB;
+                font-size: 12px;
+                outline: none;
+            }
+            QListWidget::item {
+                padding: 6px 8px;
+                border-radius: 4px;
+            }
+            QListWidget::item:hover {
+                background-color: rgba(60, 60, 60, 150);
+            }
+            QListWidget::item:selected {
+                background-color: rgba(80, 80, 120, 180);
+                color: #FFFFFF;
+            }
+            QScrollBar:vertical {
+                background: rgba(40, 40, 40, 120);
+                width: 6px;
+                margin: 0;
+                border-radius: 3px;
+            }
+            QScrollBar::handle:vertical {
+                background: rgba(130, 130, 130, 160);
+                min-height: 30px;
+                border-radius: 3px;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+        self.library_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        layout.addWidget(self.library_list, 1)
+
+        # 底部按钮
+        btn_style = """
+            QPushButton {
+                background-color: rgba(60, 60, 60, 180);
+                color: #CCCCCC;
+                border: none;
+                border-radius: 4px;
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+            QPushButton:hover {
+                background-color: rgba(80, 80, 80, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(50, 50, 50, 180);
+            }
+        """
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(6)
+        btn_import = QPushButton("导入", self.library_panel)
+        btn_import.setStyleSheet(btn_style)
+        btn_import.clicked.connect(self._import_to_library)
+        btn_delete = QPushButton("删除", self.library_panel)
+        btn_delete.setStyleSheet(btn_style)
+        btn_delete.clicked.connect(self._delete_from_library)
+        btn_layout.addWidget(btn_import)
+        btn_layout.addWidget(btn_delete)
+        layout.addLayout(btn_layout)
+
+        # 信号连接
+        self.library_list.itemDoubleClicked.connect(self._open_library_item)
+        self.library_list.customContextMenuRequested.connect(
+            self._show_library_context_menu
+        )
+
+    def _refresh_library(self):
+        """刷新文件库列表"""
+        self.library_list.clear()
+        if not os.path.isdir(LIBRARY_DIR):
+            return
+        files = sorted(
+            [f for f in os.listdir(LIBRARY_DIR)
+             if f.lower().endswith(('.txt', '.md', '.log'))],
+            key=str.lower
+        )
+        for f in files:
+            item = QListWidgetItem(f)
+            item.setToolTip(os.path.join(LIBRARY_DIR, f))
+            self.library_list.addItem(item)
+
+    def _toggle_library_panel(self):
+        """切换文件库侧边栏显示/隐藏"""
+        self.is_library_visible = not self.is_library_visible
+        self.library_panel.setVisible(self.is_library_visible)
+        if self.is_library_visible:
+            self._refresh_library()
+
+    def _import_to_library(self):
+        """选择外部文件并导入到文件库目录"""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择要导入的文本文件", "",
+            "文本文件 (*.txt *.md *.log);;所有文件 (*.*)"
+        )
+        if not paths:
+            return
+        imported = 0
+        for path in paths:
+            try:
+                dest = os.path.join(LIBRARY_DIR, os.path.basename(path))
+                shutil.copy2(path, dest)
+                imported += 1
+            except Exception as e:
+                QMessageBox.warning(
+                    self, "导入失败",
+                    f"无法导入 {os.path.basename(path)}:\n{e}"
+                )
+        if imported > 0:
+            self._refresh_library()
+
+    def _open_library_item(self, item):
+        """双击文件库列表项: 打开文件"""
+        file_path = os.path.join(LIBRARY_DIR, item.text())
+        if os.path.isfile(file_path):
+            self._load_file(file_path)
+
+    def _delete_from_library(self):
+        """删除文件库中选中的文件（仅删除库中副本）"""
+        item = self.library_list.currentItem()
+        if not item:
+            return
+        file_name = item.text()
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定要从文件库中删除 \"{file_name}\" 吗?\n"
+            f"(仅删除文件库中的副本, 不影响原文件)",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            file_path = os.path.join(LIBRARY_DIR, file_name)
+            try:
+                os.remove(file_path)
+                self._refresh_library()
+            except Exception as e:
+                QMessageBox.warning(self, "删除失败", str(e))
+
+    def _show_library_context_menu(self, pos):
+        """文件库列表右键菜单"""
+        item = self.library_list.itemAt(pos)
+        if not item:
+            return
+        menu = QMenu(self)
+        act_open = menu.addAction("打开")
+        act_open.triggered.connect(lambda: self._open_library_item(item))
+        menu.addSeparator()
+        act_del = menu.addAction("删除")
+        act_del.triggered.connect(self._delete_from_library)
+        menu.exec_(self.library_list.mapToGlobal(pos))
 
     def _init_connections(self):
         """连接信号与槽"""
@@ -311,6 +526,8 @@ class GhostReader(QMainWindow):
         act_toggle = tray_menu.addAction("显示 / 隐藏  (Ctrl+Shift+H)")
         act_toggle.triggered.connect(self._toggle_boss_key)
         tray_menu.addSeparator()
+        act_library = tray_menu.addAction("文件库")
+        act_library.triggered.connect(self._toggle_library_panel)
         act_open = tray_menu.addAction("打开文件...")
         act_open.triggered.connect(self._open_file_dialog)
         tray_menu.addSeparator()
@@ -434,8 +651,21 @@ class GhostReader(QMainWindow):
         """
         读取文本文件并显示。
 
+        如果文件不在文件库目录中，自动复制一份到库中。
         自动尝试多种编码: utf-8 → gbk → gb2312 → big5 → latin-1
         """
+        # 文件不在库中 → 自动导入到库
+        if os.path.abspath(os.path.dirname(file_path)) != os.path.abspath(LIBRARY_DIR):
+            try:
+                dest = os.path.join(LIBRARY_DIR, os.path.basename(file_path))
+                if not os.path.exists(dest):
+                    shutil.copy2(file_path, dest)
+                    if self.is_library_visible:
+                        self._refresh_library()
+                file_path = dest
+            except Exception:
+                pass  # 导入失败不影响打开原文件
+
         try:
             content = self._read_file_auto(file_path)
             self.text_edit.setPlainText(content)
@@ -470,6 +700,11 @@ class GhostReader(QMainWindow):
     def _show_context_menu(self, pos):
         """在文本区域弹出右键菜单"""
         menu = QMenu(self)
+
+        act_library = menu.addAction(
+            "隐藏文件库" if self.is_library_visible else "显示文件库"
+        )
+        act_library.triggered.connect(self._toggle_library_panel)
 
         act_open = menu.addAction("打开文件...")
         act_open.triggered.connect(self._open_file_dialog)
@@ -545,7 +780,11 @@ class GhostReader(QMainWindow):
             "再次按下恢复显示。\n\n"
             "隐藏状态下鼠标移入窗口区域可自动显现文本。\n"
             "鼠标移出后自动恢复隐藏。\n\n"
-            "也可单击系统托盘图标切换显示/隐藏。"
+            "也可单击系统托盘图标切换显示/隐藏。\n\n"
+            "文件库:\n"
+            "  右键菜单 → 显示文件库 可打开侧边栏。\n"
+            "  拖入或打开的外部文件会自动导入到文件库。\n"
+            "  文件库路径: ~/GhostReader/library/"
         )
 
     # ============================================================
