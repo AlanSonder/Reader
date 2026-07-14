@@ -1,4 +1,6 @@
+# ====================
 # IDE
+# ====================
 .vs/
 .vscode/
 *.user
@@ -14,3 +16,28 @@
 *.pdb
 packages/
 *.log
+
+# ====================
+# Python
+# ====================
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+*.whl
+pip-log.txt
+pip-delete-this-directory.txt
+venv/
+.venv/
+env/
+ENV/
+
+# ====================
+# Ghost Reader 配置 (QSettings 注册表/文件)
+# ====================
+*.ini
+*.conf
