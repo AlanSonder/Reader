@@ -1,0 +1,16 @@
+# IDE
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+*.nupkg
+*.exe
+*.dll
+*.pdb
+packages/
+*.log
