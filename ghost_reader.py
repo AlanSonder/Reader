@@ -25,6 +25,7 @@ Ghost Reader — 幽灵文本阅读器
 import sys
 import os
 import shutil
+import subprocess
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QTextEdit, QVBoxLayout,
@@ -399,6 +400,12 @@ class GhostReader(QMainWindow):
         btn_layout.addWidget(btn_delete)
         layout.addLayout(btn_layout)
 
+        # 打开目录按钮（整行）
+        btn_explorer = QPushButton("在资源管理器中打开", self.library_panel)
+        btn_explorer.setStyleSheet(btn_style)
+        btn_explorer.clicked.connect(lambda: self._open_library_in_explorer())
+        layout.addWidget(btn_explorer)
+
         # 信号连接
         self.library_list.itemDoubleClicked.connect(self._open_library_item)
         self.library_list.customContextMenuRequested.connect(
@@ -475,17 +482,49 @@ class GhostReader(QMainWindow):
             except Exception as e:
                 QMessageBox.warning(self, "删除失败", str(e))
 
+    def _open_library_in_explorer(self, file_path=None):
+        """
+        在 Windows 资源管理器中打开文件库目录。
+
+        如果指定了 file_path，则打开资源管理器并选中该文件；
+        否则直接打开文件库目录。
+        """
+        if not os.path.isdir(LIBRARY_DIR):
+            self._init_library_dir()
+        try:
+            if file_path and os.path.isfile(file_path):
+                # 打开资源管理器并选中指定文件
+                subprocess.Popen(['explorer', '/select,', file_path])
+            else:
+                # 直接打开文件库目录
+                os.startfile(LIBRARY_DIR)
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", f"无法打开资源管理器:\n{e}")
+
     def _show_library_context_menu(self, pos):
         """文件库列表右键菜单"""
         item = self.library_list.itemAt(pos)
-        if not item:
-            return
         menu = QMenu(self)
-        act_open = menu.addAction("打开")
-        act_open.triggered.connect(lambda: self._open_library_item(item))
-        menu.addSeparator()
-        act_del = menu.addAction("删除")
-        act_del.triggered.connect(self._delete_from_library)
+
+        if item:
+            act_open = menu.addAction("打开")
+            act_open.triggered.connect(lambda: self._open_library_item(item))
+            menu.addSeparator()
+            file_path = os.path.join(LIBRARY_DIR, item.text())
+            act_explorer_file = menu.addAction("在资源管理器中显示")
+            act_explorer_file.triggered.connect(
+                lambda: self._open_library_in_explorer(file_path)
+            )
+            menu.addSeparator()
+            act_del = menu.addAction("删除")
+            act_del.triggered.connect(self._delete_from_library)
+        else:
+            # 空白处右键: 只提供打开目录
+            act_explorer_dir = menu.addAction("在资源管理器中打开")
+            act_explorer_dir.triggered.connect(
+                lambda: self._open_library_in_explorer()
+            )
+
         menu.exec_(self.library_list.mapToGlobal(pos))
 
     def _init_connections(self):
